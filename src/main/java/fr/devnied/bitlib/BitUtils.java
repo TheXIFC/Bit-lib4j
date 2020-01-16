@@ -3,7 +3,9 @@ package fr.devnied.bitlib;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -57,6 +59,11 @@ public final class BitUtils {
 	 * Size in bit of the byte tab
 	 */
 	private final int size;
+	
+	/**
+	 * Byte order for value more than 8 bits
+	 */
+	private ByteOrder byteOrder = ByteOrder.BIG_ENDIAN;
 
 	/**
 	 * Constructor of the class
@@ -69,6 +76,18 @@ public final class BitUtils {
 		System.arraycopy(pByte, 0, byteTab, 0, pByte.length);
 		size = pByte.length * BYTE_SIZE;
 	}
+	
+	/**
+	 * Static method to get instance of class
+	 * 
+	 * @param pByte
+	 * 			byte read
+	 * @return
+	 * 		the instance
+	 */
+	public static BitUtils fromArray(final byte pByte[]) {
+		return new BitUtils(pByte);
+	}
 
 	/**
 	 * Constructor for empty byte tab
@@ -79,6 +98,18 @@ public final class BitUtils {
 	public BitUtils(final int pSize) {
 		byteTab = new byte[(int) Math.ceil(pSize / BYTE_SIZE_F)];
 		size = pSize;
+	}
+	
+	/**
+	 * Static method to get instance of class
+	 * 
+	 * @param pSize
+	 * 			the size of the tab in bit
+	 * @return
+	 * 		the instance
+	 */
+	public static BitUtils allocate(final int pSize) {
+		return new BitUtils(pSize);
 	}
 
 	/**
@@ -136,6 +167,20 @@ public final class BitUtils {
 		}
 		return ret;
 	}
+	
+	public byte getMask_LE(final int pIndex, final int pLength) {
+		byte ret = (byte) DEFAULT_VALUE;
+		// Add X 0 to the left
+		ret = (byte) ((ret & DEFAULT_VALUE) >> pIndex);
+		ret = (byte) (ret << pIndex);
+		// Add X 0 to the right
+		int dec = BYTE_SIZE - (pLength + pIndex);
+		if (dec > 0) {
+			ret = (byte) (ret << dec);
+			ret = (byte) ((ret & DEFAULT_VALUE) >> dec);
+		}
+		return ret;
+	}
 
 	/**
 	 * Get the Next boolean (read 1 bit)
@@ -162,6 +207,15 @@ public final class BitUtils {
 	 */
 	public byte[] getNextByte(final int pSize) {
 		return getNextByte(pSize, true);
+	}
+	
+	/**
+	 * Method to get single regular-sized (8 bit) byte
+	 * 
+	 * @return the byte read
+	 */
+	public byte getNextByte() {
+		return getNextByte(8)[0];
 	}
 
 	/**
@@ -324,26 +378,57 @@ public final class BitUtils {
 		int readSize = pLength;
 		// length max of the index
 		int max = currentBitIndex + pLength;
+		if (byteOrder == ByteOrder.BIG_ENDIAN) {
+			while (currentBitIndex < max) {
+				int mod = currentBitIndex % BYTE_SIZE;
+				// apply the mask to the selected byte
+				currentValue = byteTab[currentBitIndex / BYTE_SIZE] & getMask(mod, readSize) & DEFAULT_VALUE;
+				// Shift right the read value
+				int dec = Math.max(BYTE_SIZE - (mod + readSize), 0);
+				currentValue = (currentValue & DEFAULT_VALUE) >>> dec & DEFAULT_VALUE;
+				// Shift left the previously read value and add the current value
+				finalValue = finalValue << Math.min(readSize, BYTE_SIZE) | currentValue;
+				// calculate read value size
+				int val = BYTE_SIZE - mod;
+				// Decrease the size left
+				readSize = readSize - val;
+				currentBitIndex = Math.min(currentBitIndex + val, max);
+			}
+			
+			buffer.putLong(finalValue);
+			// reset the current bytebuffer index to 0
+			buffer.rewind();
+			// return integer
+			return buffer.getLong();
+		}
+		
+		
 		while (currentBitIndex < max) {
 			int mod = currentBitIndex % BYTE_SIZE;
 			// apply the mask to the selected byte
-			currentValue = byteTab[currentBitIndex / BYTE_SIZE] & getMask(mod, readSize) & DEFAULT_VALUE;
+			currentValue = byteTab[currentBitIndex / BYTE_SIZE] & getMask_LE(mod, readSize) & DEFAULT_VALUE;
 			// Shift right the read value
 			int dec = Math.max(BYTE_SIZE - (mod + readSize), 0);
-			currentValue = (currentValue & DEFAULT_VALUE) >>> dec & DEFAULT_VALUE;
+			currentValue = (currentValue & DEFAULT_VALUE) << dec & DEFAULT_VALUE;
+			currentValue <<= Long.SIZE - BYTE_SIZE;
 			// Shift left the previously read value and add the current value
-			finalValue = finalValue << Math.min(readSize, BYTE_SIZE) | currentValue;
+			finalValue = finalValue >>> Math.min(readSize, BYTE_SIZE) | currentValue;
 			// calculate read value size
 			int val = BYTE_SIZE - mod;
 			// Decrease the size left
 			readSize = readSize - val;
 			currentBitIndex = Math.min(currentBitIndex + val, max);
 		}
+		
+		
+		finalValue >>>= (Long.SIZE - pLength);
 		buffer.putLong(finalValue);
-		// reset the current bytebuffer index to 0
-		buffer.rewind();
-		// return integer
+//		buffer.order(ByteOrder.LITTLE_ENDIAN);
+		((Buffer) buffer).rewind();
 		return buffer.getLong();
+
+		
+		
 	}
 
 	/**
@@ -660,5 +745,18 @@ public final class BitUtils {
 	 */
 	public void setNextString(final String pValue, final int pLength, final boolean pPaddedBefore) {
 		setNextByte(pValue.getBytes(Charset.defaultCharset()), pLength, pPaddedBefore);
+	}
+	
+	/**
+	 * Set byte order
+	 * 
+	 * @param byteOrder
+	 * 				order to set
+	 * @return
+	 * 		this
+	 */
+	public BitUtils order(final ByteOrder byteOrder) {
+		this.byteOrder = byteOrder;
+		return this;
 	}
 }
